@@ -1,7 +1,7 @@
 local PROGRAM = "wh-controller"
 local ROLE = "warehouse"
 local VERSION = "0.1.0"
-local SOURCE_BASE_URL = "https://raw.githubusercontent.com/wradley/cc-tweaked-programs/refs/heads/main/programs/wh-controller/0.1.0"
+local SOURCE_BASE_URL = "https://raw.githubusercontent.com/wradley/cc-wh-controller/refs/tags/v" .. VERSION
 local MANIFEST_SOURCE_PATH = "install/manifests/0.1.0.lua"
 local GENERATED_STARTUP_MARKER = "-- wh-controller generated launcher"
 

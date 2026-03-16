@@ -1,21 +1,40 @@
 local PROGRAM = "wh-controller"
 local ROLE = "warehouse"
-local VERSION = "0.1.0"
+local VERSION = "0.1.1"
 local SOURCE_BASE_URL = "https://raw.githubusercontent.com/wradley/cc-wh-controller/refs/tags/v" .. VERSION
-local MANIFEST_SOURCE_PATH = "install/manifests/0.1.0.lua"
+local MANIFEST_SOURCE_PATH = "install/manifest.lua"
 local GENERATED_STARTUP_MARKER = "-- wh-controller generated launcher"
 
 local function combineUrl(base, path)
   return string.gsub(base, "/+$", "") .. "/" .. string.gsub(path, "^/+", "")
 end
 
-local function readRequired(prompt)
-  write(prompt)
-  local value = read()
-  if not value or value == "" then
-    error("required value was empty", 0)
+local function parseArgs(argv)
+  local options = {
+    force = false,
+    source_base_url = nil,
+  }
+
+  local index = 1
+  while index <= #argv do
+    local arg = argv[index]
+
+    if arg == "--force" then
+      options.force = true
+      index = index + 1
+    elseif arg == "--source-base-url" then
+      local value = argv[index + 1]
+      if not value or value == "" then
+        error("missing value after --source-base-url", 0)
+      end
+      options.source_base_url = value
+      index = index + 2
+    else
+      error("unknown installer argument: " .. arg, 0)
+    end
   end
-  return value
+
+  return options
 end
 
 local function ensureDir(path)
@@ -153,7 +172,7 @@ local function loadManifest(baseUrl)
   if type(manifest) ~= "table" then
     error("installer manifest did not return a table", 0)
   end
-  if manifest.program ~= PROGRAM or manifest.role ~= ROLE or manifest.version ~= VERSION then
+  if manifest.program ~= PROGRAM or manifest.role ~= ROLE then
     error("installer manifest metadata did not match bootstrap constants", 0)
   end
   if type(manifest.files) ~= "table" or #manifest.files == 0 then
@@ -163,19 +182,24 @@ local function loadManifest(baseUrl)
   return manifest
 end
 
-local function installFiles(baseUrl, manifest)
+local function installFiles(baseUrl, manifest, force)
   local installRoot = fs.combine("/programs/" .. PROGRAM, VERSION)
+
+  if fs.exists(installRoot) then
+    if not force then
+      error("installed version already exists: " .. installRoot .. " (pass --force to replace it)", 0)
+    end
+    fs.delete(installRoot)
+  end
+
   ensureDir(installRoot)
 
-  for _, file in ipairs(manifest.files) do
-    if type(file.path) ~= "string" or file.path == "" then
-      error("manifest file entry missing path", 0)
-    end
-    if type(file.source_path) ~= "string" or file.source_path == "" then
-      error("manifest file entry missing source_path for " .. file.path, 0)
+  for _, relativePath in ipairs(manifest.files) do
+    if type(relativePath) ~= "string" or relativePath == "" then
+      error("manifest file entry must be a non-empty path string", 0)
     end
 
-    download(combineUrl(baseUrl, file.source_path), fs.combine(installRoot, file.path))
+    download(combineUrl(baseUrl, relativePath), fs.combine(installRoot, relativePath))
   end
 end
 
@@ -190,13 +214,11 @@ local function shouldActivate()
   return answer == "y" or answer == "yes"
 end
 
-local baseUrl = SOURCE_BASE_URL
-if baseUrl == "REPLACE_WITH_PROGRAM_ROOT_RAW_URL" then
-  baseUrl = readRequired("Program root raw URL: ")
-end
+local options = parseArgs({ ... })
+local baseUrl = options.source_base_url or SOURCE_BASE_URL
 
 local manifest = loadManifest(baseUrl)
-installFiles(baseUrl, manifest)
+installFiles(baseUrl, manifest, options.force)
 ensureConfigTemplate(baseUrl, manifest)
 writeStartup()
 

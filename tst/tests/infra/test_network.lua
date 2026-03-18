@@ -4,6 +4,13 @@ local ccEnv = require("support.cc_test_env")
 local function freshModules()
   package.loaded["deps.log"] = nil
   package.loaded["infra.network"] = nil
+  package.loaded["rednet_contracts"] = nil
+  package.loaded["rednet_contracts.init"] = nil
+  package.loaded["rednet_contracts.discovery_v1"] = nil
+  package.loaded["rednet_contracts.errors"] = nil
+  package.loaded["rednet_contracts.schema_validation"] = nil
+  package.loaded["rednet_contracts.mrpc_v1"] = nil
+  package.loaded["rednet_contracts.services.warehouse_v1"] = nil
   return require("infra.network")
 end
 
@@ -11,6 +18,7 @@ local function baseState()
   return {
     network = {
       protocol = "warehouse_sync_v1",
+      heartbeat_seconds = 5,
     },
     warehouse = {
       id = "west",
@@ -20,6 +28,17 @@ local function baseState()
       type = "snapshot",
       warehouse_id = "west",
       warehouse_address = "WH_WEST",
+      observed_at = 2000,
+      inventory = {
+        ["minecraft:iron_ingot"] = 9,
+      },
+      capacity = {
+        storages_online = 2,
+        storages_total = 2,
+        storages_with_unknown_capacity = 0,
+        slot_capacity_total = 20,
+        slot_capacity_used = 4,
+      },
     },
     latest_assignment_batch = nil,
     latest_assignment_batch_is_persisted = false,
@@ -28,6 +47,7 @@ local function baseState()
     last_assignment_execution = nil,
     last_assignment_execution_is_persisted = false,
     last_assignment_execution_at = nil,
+    owner = nil,
   }
 end
 
@@ -41,187 +61,238 @@ function TestWarehouseNetwork:tearDown()
   ccEnv.restore()
 end
 
-function TestWarehouseNetwork:testSnapshotRequestClearsPersistedBatchWhenCoordinatorHasNoActiveBatch()
+function TestWarehouseNetwork:testSendHeartbeatUsesDiscoveryContract()
   local Network = freshModules()
   local state = baseState()
-  state.latest_assignment_batch = {
-    batch_id = "old-batch",
-    total_assignments = 2,
-    total_items = 15,
-  }
-  state.latest_assignment_batch_is_persisted = true
-  state.last_assignment_received_at = 1111
-  state.last_assignment_execution = {
-    batch_id = "old-batch",
-    status = "queued",
-  }
-  state.last_assignment_execution_is_persisted = true
-  state.last_assignment_execution_at = 1112
 
-  local cleared = 0
-  local refreshed = 0
-  local snapshotRequested = Network.handleMessage(
-    state,
-    0,
-    {
-      type = "get_snapshot",
-      active_batch_id = nil,
-    },
-    "warehouse_sync_v1",
-    {
-      refresh = function(currentState)
-        refreshed = refreshed + 1
-        currentState.latest_snapshot = {
-          type = "snapshot",
-          warehouse_id = "west",
-          warehouse_address = "WH_WEST",
-        }
-      end,
-    },
-    {},
-    {
-      clearPersistedAssignmentState = function()
-        cleared = cleared + 1
-      end,
-    },
-    nil
-  )
+  Network.sendHeartbeat(state)
 
-  lu.assertTrue(snapshotRequested)
-  lu.assertEquals(refreshed, 1)
-  lu.assertEquals(cleared, 1)
-  lu.assertNil(state.latest_assignment_batch)
-  lu.assertNil(state.last_assignment_execution)
+  lu.assertEquals(#ccEnv.getBroadcastMessages(), 1)
+  lu.assertEquals(ccEnv.getBroadcastMessages()[1].protocol, "rc.discovery_v1")
+  lu.assertEquals(ccEnv.getBroadcastMessages()[1].message.discovery_version, 1)
+  lu.assertEquals(ccEnv.getBroadcastMessages()[1].message.device_id, "west")
+  lu.assertEquals(ccEnv.getBroadcastMessages()[1].message.protocols[1].name, "warehouse")
+end
+
+function TestWarehouseNetwork:testGetOwnerReturnsNilWhenWarehouseIsFree()
+  local Network = freshModules()
+  local state = baseState()
+
+  ccEnv.queueRednetReceive(17, {
+    type = "request",
+    protocol = {
+      name = "warehouse",
+      version = 1,
+    },
+    request_id = "req-owner-1",
+    method = "get_owner",
+    params = {},
+    sent_at = 2000,
+  }, "rc.mrpc_v1")
+
+  local snapshotRequested = Network.handleRequest(state, {}, {}, {}, nil)
+
+  lu.assertFalse(snapshotRequested)
   lu.assertEquals(#ccEnv.getSentMessages(), 1)
-  lu.assertEquals(ccEnv.getSentMessages()[1].message.type, "snapshot")
+  lu.assertTrue(ccEnv.getSentMessages()[1].message.ok)
+  lu.assertNil(ccEnv.getSentMessages()[1].message.result.owner)
 end
 
-function TestWarehouseNetwork:testSnapshotRequestKeepsMatchingBatch()
+function TestWarehouseNetwork:testSetOwnerPersistsAndRepliesWithAcceptedOwner()
   local Network = freshModules()
   local state = baseState()
-  state.latest_assignment_batch = {
-    batch_id = "batch-1",
-    total_assignments = 1,
-    total_items = 5,
+  local persistedOwner
+
+  ccEnv.queueRednetReceive(17, {
+    type = "request",
+    protocol = {
+      name = "warehouse",
+      version = 1,
+    },
+    request_id = "req-owner-2",
+    method = "set_owner",
+    params = {
+      coordinator_id = "coord-1",
+      coordinator_address = "global-sync",
+      claimed_at = 1999,
+    },
+    sent_at = 2000,
+  }, "rc.mrpc_v1")
+
+  Network.handleRequest(state, {}, {}, {
+    persistOwner = function(owner)
+      persistedOwner = owner
+    end,
+  }, nil)
+
+  lu.assertEquals(state.owner.coordinator_id, "coord-1")
+  lu.assertEquals(state.owner.sender_id, 17)
+  lu.assertEquals(persistedOwner.sender_id, 17)
+  lu.assertEquals(#ccEnv.getSentMessages(), 1)
+  lu.assertTrue(ccEnv.getSentMessages()[1].message.result.accepted)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.owner.coordinator_address, "global-sync")
+end
+
+function TestWarehouseNetwork:testGetSnapshotFailsClosedWithoutAcceptedOwner()
+  local Network = freshModules()
+  local state = baseState()
+
+  ccEnv.queueRednetReceive(17, {
+    type = "request",
+    protocol = {
+      name = "warehouse",
+      version = 1,
+    },
+    request_id = "req-snapshot-1",
+    method = "get_snapshot",
+    params = {},
+    sent_at = 2000,
+  }, "rc.mrpc_v1")
+
+  local snapshotRequested = Network.handleRequest(state, {}, {}, {}, nil)
+
+  lu.assertFalse(snapshotRequested)
+  lu.assertEquals(#ccEnv.getSentMessages(), 1)
+  lu.assertFalse(ccEnv.getSentMessages()[1].message.ok)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.error.code, "ownership_required")
+end
+
+function TestWarehouseNetwork:testAssignTransferRequestPersistsExecutesAndReplies()
+  local Network = freshModules()
+  local state = baseState()
+  state.owner = {
+    coordinator_id = "coord-1",
+    coordinator_address = "global-sync",
+    claimed_at = 1900,
+    sender_id = 17,
   }
 
-  local cleared = 0
-  local snapshotRequested = Network.handleMessage(
-    state,
-    0,
-    {
-      type = "get_snapshot",
-      active_batch_id = "batch-1",
-    },
-    "warehouse_sync_v1",
-    {
-      refresh = function()
-      end,
-    },
-    {},
-    {
-      clearPersistedAssignmentState = function()
-        cleared = cleared + 1
-      end,
-    },
-    nil
-  )
-
-  lu.assertTrue(snapshotRequested)
-  lu.assertEquals(cleared, 0)
-  lu.assertEquals(state.latest_assignment_batch.batch_id, "batch-1")
-end
-
-function TestWarehouseNetwork:testAssignmentBatchPersistsAcksAndExecutes()
-  local Network = freshModules()
-  local state = baseState()
   local persistedBatch
   local executorCalls = 0
 
-  local handled = Network.handleMessage(
-    state,
-    0,
-    {
-      type = "assignment_batch",
+  ccEnv.queueRednetReceive(17, {
+    type = "request",
+    protocol = {
+      name = "warehouse",
+      version = 1,
+    },
+    request_id = "req-transfer-1",
+    method = "assign_transfer_request",
+    params = {
+      coordinator_id = "coord-1",
+      transfer_request_id = "tr-1",
+      sent_at = 2000,
       warehouse_id = "west",
-      batch_id = "batch-2",
-      total_assignments = 1,
-      total_items = 9,
       assignments = {
         {
           assignment_id = "assign-1",
+          source = "global_inventory",
+          destination = "crate-a",
+          destination_address = "WH_EAST",
+          reason = "rebalance",
+          status = "queued",
+          items = {
+            {
+              name = "minecraft:iron_ingot",
+              count = 9,
+            },
+          },
+          total_items = 9,
+          line_count = 1,
         },
       },
+      total_assignments = 1,
+      total_items = 9,
     },
-    "warehouse_sync_v1",
-    {},
-    {},
-    {
-      persistAssignmentBatch = function(message)
-        persistedBatch = message
-      end,
-    },
-    {
-      executeBatch = function(_, batch)
-        executorCalls = executorCalls + 1
-        return true, "queued", {
-          batch_id = batch.batch_id,
-          status = "queued",
-          executed_at = 2000,
-          total_assignments = 1,
-          total_items_requested = 9,
-          total_items_queued = 9,
-          assignments = {},
-        }
-      end,
-    }
-  )
+    sent_at = 2000,
+  }, "rc.mrpc_v1")
 
-  lu.assertFalse(handled)
-  lu.assertEquals(persistedBatch.batch_id, "batch-2")
+  Network.handleRequest(state, {}, {}, {
+    persistAssignmentBatch = function(batch)
+      persistedBatch = batch
+    end,
+  }, {
+    executeBatch = function(_, batch)
+      executorCalls = executorCalls + 1
+      return true, "queued", {
+        batch_id = batch.batch_id,
+        executed_at = 2000,
+        status = "queued",
+        total_assignments = 1,
+        total_items_requested = 9,
+        total_items_queued = 9,
+        assignments = {
+          {
+            assignment_id = "assign-1",
+            destination = "crate-a",
+            destination_address = "WH_EAST",
+            line_count = 1,
+            requested_items = 9,
+            queued_items = 9,
+            status = "queued",
+          },
+        },
+      }
+    end,
+  })
+
+  lu.assertEquals(persistedBatch.batch_id, "tr-1")
+  lu.assertEquals(state.latest_assignment_batch.batch_id, "tr-1")
   lu.assertEquals(executorCalls, 1)
-  lu.assertEquals(state.latest_assignment_batch.batch_id, "batch-2")
-  lu.assertFalse(state.latest_assignment_batch_is_persisted)
-  lu.assertEquals(#ccEnv.getSentMessages(), 2)
-  lu.assertEquals(ccEnv.getSentMessages()[1].message.type, "assignment_ack")
-  lu.assertEquals(ccEnv.getSentMessages()[2].message.type, "assignment_execution")
+  lu.assertEquals(#ccEnv.getSentMessages(), 1)
+  lu.assertTrue(ccEnv.getSentMessages()[1].message.ok)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.transfer_request_id, "tr-1")
 end
 
-function TestWarehouseNetwork:testAssignmentBatchForDifferentWarehouseIsIgnored()
+function TestWarehouseNetwork:testGetTransferRequestStatusReturnsExecutionForOwner()
   local Network = freshModules()
   local state = baseState()
-  local persistedCalls = 0
-
-  local handled = Network.handleMessage(
-    state,
-    0,
-    {
-      type = "assignment_batch",
-      warehouse_id = "east",
-      batch_id = "batch-x",
-      total_assignments = 1,
-      total_items = 4,
-      assignments = {},
+  state.owner = {
+    coordinator_id = "coord-1",
+    coordinator_address = "global-sync",
+    claimed_at = 1900,
+    sender_id = 17,
+  }
+  state.last_assignment_execution = {
+    batch_id = "tr-1",
+    executed_at = 2000,
+    status = "queued",
+    total_assignments = 1,
+    total_items_requested = 9,
+    total_items_queued = 9,
+    assignments = {
+      {
+        assignment_id = "assign-1",
+        destination = "crate-a",
+        destination_address = "WH_EAST",
+        line_count = 1,
+        requested_items = 9,
+        queued_items = 9,
+        status = "queued",
+      },
     },
-    "warehouse_sync_v1",
-    {},
-    {},
-    {
-      persistAssignmentBatch = function()
-        persistedCalls = persistedCalls + 1
-      end,
-    },
-    {
-      executeBatch = function()
-        error("should not execute")
-      end,
-    }
-  )
+  }
 
-  lu.assertFalse(handled)
-  lu.assertEquals(persistedCalls, 0)
-  lu.assertNil(state.latest_assignment_batch)
-  lu.assertEquals(#ccEnv.getSentMessages(), 0)
+  ccEnv.queueRednetReceive(17, {
+    type = "request",
+    protocol = {
+      name = "warehouse",
+      version = 1,
+    },
+    request_id = "req-status-1",
+    method = "get_transfer_request_status",
+    params = {
+      transfer_request_id = "tr-1",
+    },
+    sent_at = 2000,
+  }, "rc.mrpc_v1")
+
+  Network.handleRequest(state, {}, {}, {}, nil)
+
+  lu.assertEquals(#ccEnv.getSentMessages(), 1)
+  lu.assertTrue(ccEnv.getSentMessages()[1].message.ok)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.status, "queued")
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.assignments[1].queued_items, 9)
 end
 
 return TestWarehouseNetwork

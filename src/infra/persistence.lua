@@ -14,6 +14,10 @@ local function executionPath()
   return fs.combine(varDir(), "assignment_execution.txt")
 end
 
+local function ownerPath()
+  return fs.combine(varDir(), "owner.txt")
+end
+
 ---Ensure the local `var/` directory exists before persistence writes.
 ---@return nil
 function M.ensureVarDir()
@@ -63,6 +67,24 @@ function M.persistAssignmentExecution(execution)
   handle.close()
 end
 
+---Persist the accepted coordinator ownership record to disk.
+---@param owner WarehouseAcceptedOwner
+---@return nil
+function M.persistOwner(owner)
+  M.ensureVarDir()
+
+  local handle = fs.open(ownerPath(), "w")
+  if not handle then
+    error("failed to open owner file for writing", 0)
+  end
+
+  handle.write(textutils.serialize({
+    owner = owner,
+    saved_at = os.epoch("utc"),
+  }))
+  handle.close()
+end
+
 ---Remove the persisted assignment batch file when local state is cleared.
 ---@return nil
 function M.clearPersistedAssignmentBatch()
@@ -84,6 +106,14 @@ end
 function M.clearPersistedAssignmentState()
   M.clearPersistedAssignmentBatch()
   M.clearPersistedAssignmentExecution()
+end
+
+---Remove the persisted owner file when warehouse ownership is cleared.
+---@return nil
+function M.clearPersistedOwner()
+  if fs.exists(ownerPath()) then
+    fs.delete(ownerPath())
+  end
 end
 
 local function loadSerialized(path, fieldName)
@@ -119,6 +149,12 @@ function M.loadPersistedAssignmentExecution()
   return loadSerialized(executionPath(), "execution")
 end
 
+---Load the most recently persisted owner record from disk.
+---@return WarehouseAcceptedOwner|nil, number|nil
+function M.loadPersistedOwner()
+  return loadSerialized(ownerPath(), "owner")
+end
+
 ---Rehydrate persisted assignment data into the live warehouse runtime state.
 ---@param state WarehouseState
 ---@return nil
@@ -135,6 +171,11 @@ function M.loadPersistedState(state)
     state.last_assignment_execution = execution
     state.last_assignment_execution_is_persisted = true
     state.last_assignment_execution_at = execution.executed_at or nil
+  end
+
+  local owner = M.loadPersistedOwner()
+  if type(owner) == "table" then
+    state.owner = owner
   end
 end
 

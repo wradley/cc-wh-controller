@@ -17,6 +17,11 @@ local function drawStatus(state, store, lastSnapshotAt)
   print(state.warehouse.address)
   print("")
   print("Heartbeat: " .. tostring(state.network.heartbeat_seconds) .. "s")
+  if state.owner then
+    print("Owner: " .. tostring(state.owner.coordinator_id) .. " @" .. tostring(state.owner.sender_id))
+  else
+    print("Owner: free")
+  end
 
   if state.latest_snapshot then
     print("Storages: " .. state.latest_snapshot.capacity.storages_online .. "/" .. state.latest_snapshot.capacity.storages_total)

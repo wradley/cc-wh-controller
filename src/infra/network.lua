@@ -1,41 +1,23 @@
 ---Warehouse network transport helpers for coordinator communication.
----@class WarehouseNetwork
-local M = {}
+local contracts = require("rednet_contracts")
 local log = require("deps.log")
 
-local function clearLocalAssignmentState(state, persistence, reason)
-  state.latest_assignment_batch = nil
-  state.latest_assignment_batch_is_persisted = false
-  state.last_assignment_received_at = nil
-  state.last_assignment_ack_at = nil
-  state.last_assignment_execution = nil
-  state.last_assignment_execution_is_persisted = false
-  state.last_assignment_execution_at = nil
-  persistence.clearPersistedAssignmentState()
-  log.info("Cleared local assignment state: %s", reason)
-end
+---@class WarehouseNetwork
+local M = {}
 
-local function reconcileAssignmentState(state, message, persistence)
-  local localBatch = state.latest_assignment_batch
-  local localBatchId = localBatch and localBatch.batch_id or nil
-  local activeBatchId = message.active_batch_id
+local warehouseService = contracts.warehouse_v1
+local discoveryService = contracts.discovery_v1
 
-  if localBatchId == nil then
-    return
+local function publicOwnerRecord(state)
+  if not state.owner then
+    return nil
   end
 
-  if activeBatchId == nil then
-    clearLocalAssignmentState(state, persistence, "coordinator reported no active batch")
-    return
-  end
-
-  if localBatchId ~= activeBatchId then
-    clearLocalAssignmentState(
-      state,
-      persistence,
-      "coordinator batch mismatch local=" .. tostring(localBatchId) .. " active=" .. tostring(activeBatchId)
-    )
-  end
+  return {
+    coordinator_id = state.owner.coordinator_id,
+    coordinator_address = state.owner.coordinator_address,
+    claimed_at = state.owner.claimed_at,
+  }
 end
 
 local function openRednet(side)
@@ -44,6 +26,216 @@ local function openRednet(side)
   end
 
   return rednet.isOpen(side)
+end
+
+local function assignmentRequestedItems(assignment)
+  local total = 0
+  for _, item in ipairs(assignment.items or {}) do
+    total = total + (item.count or 0)
+  end
+  return total
+end
+
+local function refreshSnapshot(state, snapshotLib, tables)
+  snapshotLib.refresh(state, tables)
+  return state.latest_snapshot
+end
+
+local function buildGetOwnerResult(state)
+  return {
+    warehouse_id = state.warehouse.id,
+    warehouse_address = state.warehouse.address,
+    owner = publicOwnerRecord(state),
+    observed_at = os.epoch("utc"),
+  }
+end
+
+local function buildOverviewResult(state, snapshot)
+  local lastExecution = nil
+  if state.last_assignment_execution then
+    local assignments = {}
+    for index, assignment in ipairs(state.last_assignment_execution.assignments or {}) do
+      assignments[index] = {
+        destination = assignment.destination,
+        item_count = assignment.queued_items or 0,
+      }
+    end
+
+    lastExecution = {
+      transfer_request_id = state.last_assignment_execution.batch_id,
+      status = state.last_assignment_execution.status,
+      executed_at = state.last_assignment_execution.executed_at,
+      assignments = assignments,
+      total_items_requested = state.last_assignment_execution.total_items_requested or 0,
+      total_items_queued = state.last_assignment_execution.total_items_queued or 0,
+    }
+  end
+
+  local activeTransferRequest = nil
+  if state.latest_assignment_batch then
+    activeTransferRequest = {
+      id = state.latest_assignment_batch.batch_id,
+      received_at = state.last_assignment_received_at or state.latest_assignment_batch.sent_at or os.epoch("utc"),
+    }
+  end
+
+  local lastAck = nil
+  if state.latest_assignment_batch and state.last_assignment_ack_at then
+    lastAck = {
+      transfer_request_id = state.latest_assignment_batch.batch_id,
+      sent_at = state.last_assignment_ack_at,
+    }
+  end
+
+  return {
+    warehouse_id = state.warehouse.id,
+    warehouse_address = state.warehouse.address,
+    observed_at = snapshot.observed_at,
+    status = {
+      online = true,
+      storage_online = snapshot.capacity.storages_online or 0,
+      storage_total = snapshot.capacity.storages_total or 0,
+      slot_capacity_used = snapshot.capacity.slot_capacity_used or 0,
+      slot_capacity_total = snapshot.capacity.slot_capacity_total or 0,
+      storages_with_unknown_capacity = snapshot.capacity.storages_with_unknown_capacity or 0,
+    },
+    active_transfer_request = activeTransferRequest,
+    last_ack = lastAck,
+    last_execution = lastExecution,
+    recent_issues = {},
+  }
+end
+
+local function buildSnapshotResult(state, snapshot)
+  return {
+    warehouse_id = state.warehouse.id,
+    warehouse_address = state.warehouse.address,
+    observed_at = snapshot.observed_at,
+    inventory = snapshot.inventory or {},
+    capacity = {
+      slot_capacity_total = snapshot.capacity.slot_capacity_total or 0,
+      slot_capacity_used = snapshot.capacity.slot_capacity_used or 0,
+    },
+  }
+end
+
+local function toInternalBatch(params)
+  return {
+    type = "assignment_batch",
+    protocol_version = 1,
+    coordinator_id = params.coordinator_id,
+    warehouse_id = params.warehouse_id,
+    batch_id = params.transfer_request_id,
+    sent_at = params.sent_at,
+    assignments = params.assignments,
+    total_assignments = params.total_assignments,
+    total_items = params.total_items,
+  }
+end
+
+local function buildSetOwnerResult(state, accepted)
+  return {
+    warehouse_id = state.warehouse.id,
+    warehouse_address = state.warehouse.address,
+    accepted = accepted,
+    owner = publicOwnerRecord(state),
+    sent_at = os.epoch("utc"),
+  }
+end
+
+local function buildTransferRequestStatus(state, transferRequestId)
+  if state.last_assignment_execution and state.last_assignment_execution.batch_id == transferRequestId then
+    local assignments = {}
+    for index, assignment in ipairs(state.last_assignment_execution.assignments or {}) do
+      assignments[index] = {
+        assignment_id = assignment.assignment_id,
+        destination = assignment.destination,
+        destination_address = assignment.destination_address,
+        line_count = assignment.line_count or 0,
+        requested_items = assignment.requested_items or 0,
+        queued_items = assignment.queued_items or 0,
+        status = assignment.status,
+      }
+    end
+
+    return {
+      warehouse_id = state.warehouse.id,
+      warehouse_address = state.warehouse.address,
+      transfer_request_id = transferRequestId,
+      status = state.last_assignment_execution.status,
+      executed_at = state.last_assignment_execution.executed_at,
+      total_assignments = state.last_assignment_execution.total_assignments or 0,
+      total_items_requested = state.last_assignment_execution.total_items_requested or 0,
+      total_items_queued = state.last_assignment_execution.total_items_queued or 0,
+      assignments = assignments,
+      sent_at = os.epoch("utc"),
+    }
+  end
+
+  if state.latest_assignment_batch and state.latest_assignment_batch.batch_id == transferRequestId then
+    local assignments = {}
+    local totalItemsRequested = 0
+
+    for index, assignment in ipairs(state.latest_assignment_batch.assignments or {}) do
+      local requestedItems = assignmentRequestedItems(assignment)
+      totalItemsRequested = totalItemsRequested + requestedItems
+      assignments[index] = {
+        assignment_id = assignment.assignment_id,
+        destination = assignment.destination,
+        destination_address = assignment.destination_address,
+        line_count = assignment.line_count or #(assignment.items or {}),
+        requested_items = requestedItems,
+        queued_items = 0,
+        status = "queued",
+      }
+    end
+
+    return {
+      warehouse_id = state.warehouse.id,
+      warehouse_address = state.warehouse.address,
+      transfer_request_id = transferRequestId,
+      status = "queued",
+      executed_at = nil,
+      total_assignments = state.latest_assignment_batch.total_assignments or #assignments,
+      total_items_requested = state.latest_assignment_batch.total_items or totalItemsRequested,
+      total_items_queued = 0,
+      assignments = assignments,
+      sent_at = os.epoch("utc"),
+    }
+  end
+
+  return nil
+end
+
+local function sameOwner(state, params)
+  return state.owner
+    and state.owner.coordinator_id == params.coordinator_id
+    and state.owner.coordinator_address == params.coordinator_address
+end
+
+local function senderOwnsWarehouse(state, senderId)
+  return state.owner ~= nil and state.owner.sender_id == senderId
+end
+
+local function requireOwner(senderId, state, request)
+  if senderOwnsWarehouse(state, senderId) then
+    return true
+  end
+
+  if state.owner == nil then
+    log.warn("Rejected %s from sender=%s because warehouse has no owner", tostring(request.method), tostring(senderId))
+    warehouseService.replyError(senderId, request, "ownership_required", "warehouse has no accepted coordinator owner")
+    return false
+  end
+
+  log.warn(
+    "Rejected %s from sender=%s because accepted owner sender=%s",
+    tostring(request.method),
+    tostring(senderId),
+    tostring(state.owner.sender_id)
+  )
+  warehouseService.replyError(senderId, request, "owner_mismatch", "sender is not the accepted coordinator")
+  return false
 end
 
 ---Open the configured warehouse modems for rednet traffic.
@@ -63,58 +255,23 @@ function M.openConfiguredModems(network)
   return opened
 end
 
----Broadcast a heartbeat for this warehouse.
+---Broadcast a discovery heartbeat for this warehouse.
 ---@param state WarehouseState
 ---@return nil
 function M.sendHeartbeat(state)
-  rednet.broadcast({
-    type = "heartbeat",
-    protocol_version = 1,
-    warehouse_id = state.warehouse.id,
-    warehouse_address = state.warehouse.address,
+  discoveryService.broadcast({
+    device_id = state.warehouse.id,
+    device_type = "warehouse_controller",
     sent_at = os.epoch("utc"),
-  }, state.network.protocol)
-end
-
----Acknowledge receipt of an assignment batch to the coordinator.
----@param state WarehouseState
----@param senderId integer
----@param message WarehouseAssignmentBatch
----@return nil
-function M.sendAssignmentAck(state, senderId, message)
-  rednet.send(senderId, {
-    type = "assignment_ack",
-    protocol_version = 1,
-    warehouse_id = state.warehouse.id,
-    warehouse_address = state.warehouse.address,
-    batch_id = message.batch_id,
-    assignment_count = message.total_assignments or 0,
-    item_count = message.total_items or 0,
-    sent_at = os.epoch("utc"),
-  }, state.network.protocol)
-  state.last_assignment_ack_at = os.epoch("utc")
-end
-
----Send the result of local assignment execution to the coordinator.
----@param state WarehouseState
----@param senderId integer
----@param execution WarehouseAssignmentExecution
----@return nil
-function M.sendAssignmentExecution(state, senderId, execution)
-  rednet.send(senderId, {
-    type = "assignment_execution",
-    protocol_version = 1,
-    warehouse_id = state.warehouse.id,
-    warehouse_address = state.warehouse.address,
-    batch_id = execution.batch_id,
-    status = execution.status,
-    executed_at = execution.executed_at,
-    total_assignments = execution.total_assignments or 0,
-    total_items_requested = execution.total_items_requested or 0,
-    total_items_queued = execution.total_items_queued or 0,
-    assignments = execution.assignments or {},
-    sent_at = os.epoch("utc"),
-  }, state.network.protocol)
+    interval_seconds = state.network.heartbeat_seconds,
+    protocols = {
+      {
+        name = warehouseService.NAME,
+        version = warehouseService.VERSION,
+        role = "server",
+      },
+    },
+  })
 end
 
 -- Forward coarse rail movement to the coordinator so cycle completion can wait
@@ -134,85 +291,140 @@ function M.sendTrainDeparture(state, eventMessage)
   }, state.network.protocol)
 end
 
----Handle one inbound coordinator message.
+---Receive and handle one inbound `warehouse_v1` request.
 ---@param state WarehouseState
----@param senderId integer
----@param message table
----@param protocol string
 ---@param snapshotLib table
 ---@param tables TableUtil
 ---@param persistence WarehousePersistence
 ---@param executor { executeBatch: fun(state: WarehouseState, batch: WarehouseAssignmentBatch|nil): boolean, string, WarehouseAssignmentExecution|nil }|nil
 ---@return boolean snapshotRequested True when a fresh snapshot was sent back to the requester.
-function M.handleMessage(state, senderId, message, protocol, snapshotLib, tables, persistence, executor)
-  if protocol ~= state.network.protocol or type(message) ~= "table" then
+function M.handleRequest(state, snapshotLib, tables, persistence, executor)
+  local senderId, request, method, err = warehouseService.receiveRequest()
+  if not request then
+    if err then
+      log.warn("Ignored invalid warehouse request from sender=%s: %s", tostring(senderId), tostring(err.message))
+    end
     return false
   end
 
-  if message.type == "get_snapshot" then
-    reconcileAssignmentState(state, message, persistence)
-    log.info("Received snapshot request from coordinator %s", tostring(senderId))
-    snapshotLib.refresh(state, tables)
-    rednet.send(senderId, state.latest_snapshot, state.network.protocol)
-    return true
-  end
-
-  if message.type == "ping" then
-    rednet.send(senderId, {
-      type = "pong",
-      protocol_version = 1,
-      warehouse_id = state.warehouse.id,
-      warehouse_address = state.warehouse.address,
-      sent_at = os.epoch("utc"),
-    }, state.network.protocol)
+  if method == warehouseService.METHODS.GET_OWNER then
+    warehouseService.replySuccess(senderId, request, method, buildGetOwnerResult(state))
     return false
   end
 
-  if message.type == "heartbeat" or message.type == "train_departure_notice" then
-    return false
-  end
-
-  if message.type == "assignment_batch" then
-    if message.warehouse_id ~= state.warehouse.id then
-      log.warn(
-        "Ignored assignment batch %s for warehouse=%s from sender=%s; local warehouse=%s",
-        tostring(message.batch_id),
-        tostring(message.warehouse_id),
-        tostring(senderId),
-        tostring(state.warehouse.id)
+  if method == warehouseService.METHODS.SET_OWNER then
+    if state.owner == nil or sameOwner(state, request.params) then
+      state.owner = {
+        coordinator_id = request.params.coordinator_id,
+        coordinator_address = request.params.coordinator_address,
+        claimed_at = request.params.claimed_at,
+        sender_id = senderId,
+      }
+      persistence.persistOwner(state.owner)
+      log.info(
+        "Accepted warehouse owner coordinator_id=%s sender=%s",
+        tostring(state.owner.coordinator_id),
+        tostring(senderId)
       )
+      warehouseService.replySuccess(senderId, request, method, buildSetOwnerResult(state, true))
       return false
     end
 
-    log.info(
-      "Received assignment batch %s from sender=%s with %d assignment(s), %d item(s)",
-      tostring(message.batch_id),
+    log.warn(
+      "Rejected owner claim from sender=%s coordinator_id=%s; already owned by coordinator_id=%s sender=%s",
       tostring(senderId),
-      message.total_assignments or 0,
-      message.total_items or 0
+      tostring(request.params.coordinator_id),
+      tostring(state.owner.coordinator_id),
+      tostring(state.owner.sender_id)
     )
-    state.latest_assignment_batch = message
+    warehouseService.replyError(senderId, request, "owner_mismatch", "warehouse is already owned by another coordinator")
+    return false
+  end
+
+  if not requireOwner(senderId, state, request) then
+    return false
+  end
+
+  if method == warehouseService.METHODS.GET_OVERVIEW then
+    local snapshot = refreshSnapshot(state, snapshotLib, tables)
+    warehouseService.replySuccess(senderId, request, method, buildOverviewResult(state, snapshot))
+    return false
+  end
+
+  if method == warehouseService.METHODS.GET_SNAPSHOT then
+    local snapshot = refreshSnapshot(state, snapshotLib, tables)
+    warehouseService.replySuccess(senderId, request, method, buildSnapshotResult(state, snapshot))
+    return true
+  end
+
+  if method == warehouseService.METHODS.ASSIGN_TRANSFER_REQUEST then
+    if request.params.warehouse_id ~= state.warehouse.id then
+      warehouseService.replyError(senderId, request, "invalid_params", "transfer request targeted a different warehouse", {
+        details = {
+          path = "params.warehouse_id",
+        },
+      })
+      return false
+    end
+
+    local batch = toInternalBatch(request.params)
+    state.latest_assignment_batch = batch
     state.latest_assignment_batch_is_persisted = false
     state.last_assignment_received_at = os.epoch("utc")
-    persistence.persistAssignmentBatch(message)
-    M.sendAssignmentAck(state, senderId, message)
+    persistence.persistAssignmentBatch(batch)
+    state.last_assignment_ack_at = os.epoch("utc")
+
+    log.info(
+      "Accepted transfer request %s from sender=%s with %d assignment(s), %d item(s)",
+      tostring(batch.batch_id),
+      tostring(senderId),
+      batch.total_assignments or 0,
+      batch.total_items or 0
+    )
+
     if executor then
-      local ok, status, execution = executor.executeBatch(state, message)
+      local ok, status, execution = executor.executeBatch(state, batch)
       log.info(
-        "Assignment batch %s execution returned ok=%s status=%s",
-        tostring(message.batch_id),
+        "Transfer request %s execution returned ok=%s status=%s",
+        tostring(batch.batch_id),
         tostring(ok),
         tostring(status)
       )
       if execution then
-        M.sendAssignmentExecution(state, senderId, execution)
+        state.last_assignment_execution = execution
       end
     end
+
+    warehouseService.replySuccess(senderId, request, method, {
+      warehouse_id = state.warehouse.id,
+      warehouse_address = state.warehouse.address,
+      transfer_request_id = batch.batch_id,
+      assignment_count = batch.total_assignments or 0,
+      item_count = batch.total_items or 0,
+      accepted = true,
+      sent_at = state.last_assignment_ack_at,
+    })
     return false
   end
 
-  log.warn("Ignored unknown message type from sender=%s: %s", tostring(senderId), tostring(message.type))
+  if method == warehouseService.METHODS.GET_TRANSFER_REQUEST_STATUS then
+    local result = buildTransferRequestStatus(state, request.params.transfer_request_id)
+    if not result then
+      warehouseService.replyError(
+        senderId,
+        request,
+        "unknown_transfer_request",
+        "transfer request status is not available for the requested id"
+      )
+      return false
+    end
 
+    warehouseService.replySuccess(senderId, request, method, result)
+    return false
+  end
+
+  log.warn("Ignored unknown warehouse method from sender=%s: %s", tostring(senderId), tostring(method))
+  warehouseService.replyError(senderId, request, "unknown_method", "unknown warehouse method")
   return false
 end
 

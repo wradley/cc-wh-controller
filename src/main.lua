@@ -1,5 +1,19 @@
 --- Main warehouse controller entrypoint and event-loop orchestration.
 
+local function prependPackagePath(path)
+  if not package or type(package.path) ~= "string" then
+    return
+  end
+
+  package.path = table.concat({
+    path,
+    package.path,
+  }, ";")
+end
+
+prependPackagePath("/src/deps/?.lua")
+prependPackagePath("/src/deps/?/init.lua")
+
 local Config = require("model.config")
 local log = require("deps.log")
 
@@ -65,8 +79,7 @@ end
 ---@return nil
 local function messageLoop()
   while true do
-    local senderId, message, protocol = rednet.receive(state.network.protocol)
-    local snapshotRequested = networkLib.handleMessage(state, senderId, message, protocol, snapshotLib, tables, persistence, executor)
+    local snapshotRequested = networkLib.handleRequest(state, snapshotLib, tables, persistence, executor)
     if snapshotRequested then
       lastSnapshotAt = os.epoch("utc")
     end

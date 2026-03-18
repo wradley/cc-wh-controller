@@ -6,6 +6,7 @@ local original = {}
 local currentEpoch = 0
 local sentMessages = {}
 local broadcastMessages = {}
+local queuedReceives = {}
 local peripheralObjects = {}
 local files = {}
 
@@ -100,6 +101,7 @@ function M.install(opts)
   currentEpoch = opts and opts.epoch or 0
   sentMessages = {}
   broadcastMessages = {}
+  queuedReceives = {}
   peripheralObjects = {}
   files = {}
 
@@ -156,6 +158,16 @@ function M.install(opts)
         protocol = protocol,
       }
       return true
+    end,
+    receive = function(protocol)
+      for index, entry in ipairs(queuedReceives) do
+        if protocol == nil or entry.protocol == protocol then
+          table.remove(queuedReceives, index)
+          return entry.sender_id, deepCopy(entry.message), entry.protocol
+        end
+      end
+
+      return nil, nil, protocol
     end,
   }
 
@@ -325,11 +337,25 @@ function M.getBroadcastMessages()
   return broadcastMessages
 end
 
+---Queue one rednet receive result for later `rednet.receive(...)` calls.
+---@param senderId integer
+---@param message table
+---@param protocol string|nil
+---@return nil
+function M.queueRednetReceive(senderId, message, protocol)
+  queuedReceives[#queuedReceives + 1] = {
+    sender_id = senderId,
+    message = deepCopy(message),
+    protocol = protocol,
+  }
+end
+
 ---Clear captured rednet sends and broadcasts.
 ---@return nil
 function M.clearMessages()
   sentMessages = {}
   broadcastMessages = {}
+  queuedReceives = {}
 end
 
 return M

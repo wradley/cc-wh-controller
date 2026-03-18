@@ -63,6 +63,12 @@
 ---@field train_name string
 ---@field sent_at number
 
+---@class WarehouseAcceptedOwner
+---@field coordinator_id string
+---@field coordinator_address string
+---@field claimed_at number
+---@field sender_id integer
+
 ---@class WarehouseSnapshotRequest
 ---@field type '"get_snapshot"'
 ---@field coordinator_id string|nil
@@ -92,6 +98,7 @@
 ---@field last_assignment_execution_is_persisted boolean
 ---@field last_assignment_execution_at number|nil
 ---@field last_train_departure WarehouseTrainDepartureEvent|nil
+---@field owner WarehouseAcceptedOwner|nil
 
 ---Warehouse runtime state construction.
 ---@class WarehouseRuntime
@@ -122,6 +129,7 @@ function M.newState(config)
     last_assignment_execution_is_persisted = false,
     last_assignment_execution_at = nil,
     last_train_departure = nil,
+    owner = nil,
   }
 end
 

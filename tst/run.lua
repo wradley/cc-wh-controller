@@ -19,6 +19,8 @@ prependPackagePath("/" .. fs.combine(root, "?.lua"))
 prependPackagePath("/" .. fs.combine(root, "?/init.lua"))
 prependPackagePath("/" .. fs.combine(root, "src/?.lua"))
 prependPackagePath("/" .. fs.combine(root, "src/?/init.lua"))
+prependPackagePath("/" .. fs.combine(root, "src/deps/?.lua"))
+prependPackagePath("/" .. fs.combine(root, "src/deps/?/init.lua"))
 prependPackagePath("/" .. fs.combine(root, "tst/?.lua"))
 prependPackagePath("/" .. fs.combine(root, "tst/?/init.lua"))
 

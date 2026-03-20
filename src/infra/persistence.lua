@@ -20,7 +20,7 @@ end
 
 ---Ensure the local `var/` directory exists before persistence writes.
 ---@return nil
-function M.ensureVarDir()
+local function ensureVarDir()
   local path = varDir()
   local parent = fs.getDir(path)
   if parent ~= "" and not fs.exists(parent) then
@@ -35,7 +35,7 @@ end
 ---@param message WarehouseAssignmentBatch
 ---@return nil
 function M.persistAssignmentBatch(message)
-  M.ensureVarDir()
+  ensureVarDir()
 
   local handle = fs.open(batchPath(), "w")
   if not handle then
@@ -53,7 +53,7 @@ end
 ---@param execution WarehouseAssignmentExecution
 ---@return nil
 function M.persistAssignmentExecution(execution)
-  M.ensureVarDir()
+  ensureVarDir()
 
   local handle = fs.open(executionPath(), "w")
   if not handle then
@@ -71,7 +71,7 @@ end
 ---@param owner WarehouseAcceptedOwner
 ---@return nil
 function M.persistOwner(owner)
-  M.ensureVarDir()
+  ensureVarDir()
 
   local handle = fs.open(ownerPath(), "w")
   if not handle then

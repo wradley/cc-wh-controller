@@ -180,7 +180,6 @@ function M.newState(config)
     network = config.network,
     runtime = config.runtime,
     logistics = config.logistics,
-    train = config.train,
     storage = config.storage,
     capacity_refresh_ms = config.runtime.capacity_refresh_seconds * 1000,
     storage_capacity_cache = {},

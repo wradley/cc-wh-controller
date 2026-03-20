@@ -59,9 +59,23 @@ local function assignmentRequestedItems(assignment)
   return total
 end
 
-local function refreshSnapshot(state, snapshotLib, tables)
-  snapshotLib.refresh(state, tables)
-  return state.latest_snapshot
+local function cachedSnapshot(state)
+  local snapshot = state.latest_snapshot
+  if type(snapshot) == "table" then
+    return snapshot
+  end
+
+  return {
+    observed_at = state.last_status_refresh_at or os.epoch("utc"),
+    inventory = {},
+    capacity = {
+      storages_online = 0,
+      storages_total = 0,
+      storages_with_unknown_capacity = 0,
+      slot_capacity_total = 0,
+      slot_capacity_used = 0,
+    },
+  }
 end
 
 local function buildGetOwnerResult(state)
@@ -238,6 +252,11 @@ local function sameOwner(state, params)
     and state.owner.coordinator_address == params.coordinator_address
 end
 
+local function isProtocolMismatch(err)
+  local path = err and err.details and err.details.path or nil
+  return path == "message.protocol" or path == "message.protocol.name" or path == "message.protocol.version"
+end
+
 local function senderOwnsWarehouse(state, senderId)
   return state.owner ~= nil and state.owner.sender_id == senderId
 end
@@ -308,8 +327,10 @@ end
 ---@return boolean snapshotRequested True when a fresh snapshot was sent back to the requester.
 function M.handleRequest(state, snapshotLib, tables, persistence, executor)
   local senderId, request, method, err = warehouseService.receiveRequest()
-  if not request then
-    if err then
+  if err then
+    if isProtocolMismatch(err) then
+      log.warn("Rejected warehouse request from sender=%s due to protocol mismatch: %s", tostring(senderId), tostring(err.message))
+    else
       log.warn("Ignored invalid warehouse request from sender=%s: %s", tostring(senderId), tostring(err.message))
     end
     return false
@@ -349,20 +370,20 @@ function M.handleRequest(state, snapshotLib, tables, persistence, executor)
     return false
   end
 
-  if not requireOwner(senderId, state, request) then
-    return false
-  end
-
   if method == warehouseService.METHODS.GET_OVERVIEW then
-    local snapshot = refreshSnapshot(state, snapshotLib, tables)
+    local snapshot = cachedSnapshot(state)
     warehouseService.replySuccess(senderId, request, method, buildOverviewResult(state, snapshot))
     return false
   end
 
   if method == warehouseService.METHODS.GET_SNAPSHOT then
-    local snapshot = refreshSnapshot(state, snapshotLib, tables)
+    local snapshot = cachedSnapshot(state)
     warehouseService.replySuccess(senderId, request, method, buildSnapshotResult(state, snapshot))
-    return true
+    return false
+  end
+
+  if not requireOwner(senderId, state, request) then
+    return false
   end
 
   if method == warehouseService.METHODS.ASSIGN_TRANSFER_REQUEST then

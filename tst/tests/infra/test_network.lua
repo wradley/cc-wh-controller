@@ -133,7 +133,7 @@ function TestWarehouseNetwork:testSetOwnerPersistsAndRepliesWithAcceptedOwner()
   lu.assertEquals(ccEnv.getSentMessages()[1].message.result.owner.coordinator_address, "global-sync")
 end
 
-function TestWarehouseNetwork:testGetSnapshotFailsClosedWithoutAcceptedOwner()
+function TestWarehouseNetwork:testGetSnapshotRemainsReadableWithoutAcceptedOwner()
   local Network = freshModules()
   local state = baseState()
 
@@ -153,8 +153,10 @@ function TestWarehouseNetwork:testGetSnapshotFailsClosedWithoutAcceptedOwner()
 
   lu.assertFalse(snapshotRequested)
   lu.assertEquals(#ccEnv.getSentMessages(), 1)
-  lu.assertFalse(ccEnv.getSentMessages()[1].message.ok)
-  lu.assertEquals(ccEnv.getSentMessages()[1].message.error.code, "ownership_required")
+  lu.assertTrue(ccEnv.getSentMessages()[1].message.ok)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.warehouse_id, "west")
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.capacity.slot_capacity_total, 20)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.inventory["minecraft:iron_ingot"], 9)
 end
 
 function TestWarehouseNetwork:testAssignTransferRequestPersistsExecutesAndReplies()

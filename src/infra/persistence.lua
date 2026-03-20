@@ -134,7 +134,12 @@ local function loadSerialized(path, fieldName)
     error("failed to unserialize " .. path, 0)
   end
 
-  return loaded[fieldName], loaded.saved_at
+  local value = loaded[fieldName]
+  if value == nil and fieldName ~= nil then
+    value = loaded
+  end
+
+  return value, loaded.saved_at or loaded.savedAt
 end
 
 ---Load the most recently persisted assignment batch from disk.
@@ -159,21 +164,21 @@ end
 ---@param state WarehouseState
 ---@return nil
 function M.loadPersistedState(state)
-  local batch = M.loadPersistedAssignmentBatch()
+  local batch = select(1, M.loadPersistedAssignmentBatch())
   if type(batch) == "table" then
     state.latest_assignment_batch = batch
     state.latest_assignment_batch_is_persisted = true
     state.last_assignment_received_at = batch.sent_at or nil
   end
 
-  local execution = M.loadPersistedAssignmentExecution()
+  local execution = select(1, M.loadPersistedAssignmentExecution())
   if type(execution) == "table" then
     state.last_assignment_execution = execution
     state.last_assignment_execution_is_persisted = true
     state.last_assignment_execution_at = execution.executed_at or nil
   end
 
-  local owner = M.loadPersistedOwner()
+  local owner = select(1, M.loadPersistedOwner())
   if type(owner) == "table" then
     state.owner = owner
   end

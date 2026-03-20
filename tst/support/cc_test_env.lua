@@ -29,7 +29,7 @@ local function deepCopy(value, seen)
 end
 
 local function normalizePath(path)
-  return tostring(path or ""):gsub("\\", "/")
+  return tostring(path or ""):gsub("\\", "/"):gsub("^/+", "")
 end
 
 local function parentDir(path)
@@ -64,38 +64,8 @@ local function ensureDir(path)
   end
 end
 
-local function serializeValue(value)
-  if type(value) == "table" then
-    local pieces = { "{" }
-    local first = true
-    for key, innerValue in pairs(value) do
-      if not first then
-        pieces[#pieces + 1] = ","
-      end
-      first = false
-
-      local renderedKey
-      if type(key) == "string" and key:match("^[%a_][%w_]*$") then
-        renderedKey = key
-      else
-        renderedKey = "[" .. serializeValue(key) .. "]"
-      end
-
-      pieces[#pieces + 1] = renderedKey .. "=" .. serializeValue(innerValue)
-    end
-    pieces[#pieces + 1] = "}"
-    return table.concat(pieces)
-  end
-
-  if type(value) == "string" then
-    return string.format("%q", value)
-  end
-
-  return tostring(value)
-end
-
 ---Install test doubles for ComputerCraft globals used by the warehouse layer.
----@param opts? { epoch: integer|nil }
+---@param opts? { epoch: integer|nil, computer_id: integer|nil }
 ---@return nil
 function M.install(opts)
   currentEpoch = opts and opts.epoch or 0
@@ -106,7 +76,6 @@ function M.install(opts)
   files = {}
 
   original.os = _G.os
-  original.textutils = _G.textutils
   original.rednet = _G.rednet
   original.peripheral = _G.peripheral
   original.fs = _G.fs
@@ -115,27 +84,12 @@ function M.install(opts)
     epoch = function()
       return currentEpoch
     end,
+    getComputerID = function()
+      return opts and opts.computer_id or nil
+    end,
   }, {
     __index = original.os,
   })
-
-  _G.textutils = {
-    serialize = function(value)
-      return serializeValue(deepCopy(value))
-    end,
-    unserialize = function(value)
-      if type(value) == "table" then
-        return deepCopy(value)
-      end
-
-      local chunk = load("return " .. tostring(value))
-      if not chunk then
-        return nil
-      end
-
-      return chunk()
-    end,
-  }
 
   _G.rednet = {
     isOpen = function()
@@ -283,7 +237,6 @@ end
 ---@return nil
 function M.restore()
   _G.os = original.os
-  _G.textutils = original.textutils
   _G.rednet = original.rednet
   _G.peripheral = original.peripheral
   _G.fs = original.fs

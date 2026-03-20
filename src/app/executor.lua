@@ -60,6 +60,10 @@ function M.new(config, persistence)
       total_items_requested = 0,
       total_items_queued = 0,
       assignments = {},
+      packages = batch.packages or {
+        ["in"] = {},
+        ["out"] = {},
+      },
     }
 
     if (batch.total_assignments or 0) == 0 then

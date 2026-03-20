@@ -18,6 +18,7 @@ return {
   },
   logistics = {
     stock_ticker = "Create_StockTicker_0",
+    postbox = "create:package_postbox_0",
   },
   logging = {
     output = {

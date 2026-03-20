@@ -6,7 +6,7 @@ Its job is to:
 1. publish heartbeats
 2. answer targeted snapshot requests
 3. receive and execute assignment batches
-4. report assignment execution and train departures
+4. report assignment execution and request-scoped package evidence
 
 ## Filesystem layout
 
@@ -66,8 +66,7 @@ assignment_batch ----------------------------> persist batch
                                              -> execute batch
 assignment_ack <----------------------------- acknowledge receipt
 assignment_execution <----------------------- report queued work
-
-train_departure_notice <--------------------- report post-execution departures
+get_transfer_request_status <---------------> expose queued work plus package evidence
 ```
 
 `get_snapshot` is the ongoing reconciliation path.
@@ -80,7 +79,8 @@ the warehouse clears stale persisted local assignment state before replying.
 - batches execute automatically when an `assignment_batch` arrives
 - the UI may show `(persisted)` on restored batch or execution state after boot
 - the next `get_snapshot` can clear that restored state if the coordinator says no active batch exists
-- train departures are reported back to the coordinator only for the configured export station
+- startup validates the configured stock ticker, postbox, and packager peripherals before entering the event loops
+- postbox `package_sent` and `package_received` events are recorded against the active transfer request
 - when installed through the versioned launcher flow, config loads from `/etc/wh-controller/config.lua`
 - persisted assignment state and logs are written under `/var/wh-controller/`
 - startup fails loudly if `/etc/wh-controller/config.lua` is missing

@@ -8,6 +8,29 @@ local M = {}
 local warehouseService = contracts.warehouse_v1
 local discoveryService = contracts.discovery_v1
 
+local function emptyPackages()
+  return {
+    ["in"] = {},
+    ["out"] = {},
+  }
+end
+
+local function copyPackages(packages)
+  local normalized = packages or emptyPackages()
+  local copied = {
+    ["in"] = {},
+    ["out"] = {},
+  }
+
+  for _, direction in ipairs({ "in", "out" }) do
+    for index, packageId in ipairs(normalized[direction] or {}) do
+      copied[direction][index] = packageId
+    end
+  end
+
+  return copied
+end
+
 local function publicOwnerRecord(state)
   if not state.owner then
     return nil
@@ -168,6 +191,7 @@ local function buildTransferRequestStatus(state, transferRequestId)
       total_items_requested = state.last_assignment_execution.total_items_requested or 0,
       total_items_queued = state.last_assignment_execution.total_items_queued or 0,
       assignments = assignments,
+      packages = copyPackages(state.last_assignment_execution.packages),
       sent_at = os.epoch("utc"),
     }
   end
@@ -200,6 +224,7 @@ local function buildTransferRequestStatus(state, transferRequestId)
       total_items_requested = state.latest_assignment_batch.total_items or totalItemsRequested,
       total_items_queued = 0,
       assignments = assignments,
+      packages = copyPackages(state.latest_assignment_batch.packages),
       sent_at = os.epoch("utc"),
     }
   end
@@ -272,23 +297,6 @@ function M.sendHeartbeat(state)
       },
     },
   })
-end
-
--- Forward coarse rail movement to the coordinator so cycle completion can wait
--- for post-execution departures without tracking individual packages.
----@param state WarehouseState
----@param eventMessage WarehouseTrainDepartureEvent
----@return nil
-function M.sendTrainDeparture(state, eventMessage)
-  rednet.broadcast({
-    type = "train_departure_notice",
-    protocol_version = 1,
-    warehouse_id = state.warehouse.id,
-    warehouse_address = state.warehouse.address,
-    station_name = eventMessage.station_name,
-    train_name = eventMessage.train_name,
-    sent_at = eventMessage.sent_at or os.epoch("utc"),
-  }, state.network.protocol)
 end
 
 ---Receive and handle one inbound `warehouse_v1` request.
@@ -368,6 +376,7 @@ function M.handleRequest(state, snapshotLib, tables, persistence, executor)
     end
 
     local batch = toInternalBatch(request.params)
+    batch.packages = emptyPackages()
     state.latest_assignment_batch = batch
     state.latest_assignment_batch_is_persisted = false
     state.last_assignment_received_at = os.epoch("utc")

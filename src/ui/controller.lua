@@ -74,11 +74,9 @@ local function drawStatus(state, store, lastSnapshotAt)
     local executionAgeSeconds = ageSeconds(state.last_assignment_execution_at) or 0
     print("Last exec: " .. tostring(state.last_assignment_execution.total_items_queued or 0) .. "/" .. tostring(state.last_assignment_execution.total_items_requested or 0) .. " items " .. tostring(state.last_assignment_execution.status) .. persistedSuffix)
     print("Exec age: " .. tostring(executionAgeSeconds) .. "s ago")
-  end
-
-  if state.last_train_departure then
-    print("Train dep: " .. tostring(state.last_train_departure.train_name or "?"))
-    print("Dep age: " .. tostring(math.floor((os.epoch("utc") - state.last_train_departure.sent_at) / 1000)) .. "s ago")
+    local packages = state.last_assignment_execution.packages or {}
+    print("Pkg out: " .. tostring(#(packages["out"] or {})))
+    print("Pkg in: " .. tostring(#(packages["in"] or {})))
   end
 end
 

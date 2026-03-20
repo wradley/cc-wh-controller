@@ -41,17 +41,17 @@ local executorLib = require("app.executor")
 local persistence = require("infra.persistence")
 local networkLib = require("infra.network")
 local snapshotLib = require("app.snapshot")
-local stationLib = require("infra.station")
 local tables = require("util.tables")
 local ui = require("ui.controller")
 
 log.config(config.logging)
 log.info("Warehouse boot starting for %s", config.warehouse.id)
+runtime.validateConfiguredPeripherals(config)
+log.info("Validated configured peripherals for %s", config.warehouse.id)
 
 ---@type WarehouseState
 local state = runtime.newState(config)
 local executor = executorLib.new(config, persistence)
-local station = stationLib.new(config)
 persistence.loadPersistedState(state)
 log.info("Warehouse state loaded for %s", state.warehouse.id)
 
@@ -130,29 +130,22 @@ local function inputLoop()
   end
 end
 
----Train departure event loop filtered to the configured export station.
+---Package sent event loop for outbound transport evidence.
 ---@return nil
-local function trainLoop()
-  if not station then
-    while true do
-      os.sleep(60)
-    end
-  end
-
+local function packageSentLoop()
   while true do
-    local _, eventStationName, trainName = os.pullEvent("train_departure")
-    -- Filter global train events down to the configured export station so one
-    -- warehouse controller only advances its own cycle progress.
-    if station.matchesEventStation(eventStationName) then
-      local eventMessage = {
-        station_name = eventStationName,
-        train_name = trainName,
-        sent_at = os.epoch("utc"),
-      }
-      state.last_train_departure = eventMessage
-      networkLib.sendTrainDeparture(state, eventMessage)
-    end
+    local _, packageObject = os.pullEvent("package_sent")
+    runtime.recordPackageEvent(state, persistence, "out", packageObject)
   end
 end
 
-parallel.waitForAny(heartbeatLoop, messageLoop, screenLoop, statusRefreshLoop, displayRefreshLoop, inputLoop, trainLoop)
+---Package received event loop for inbound transport evidence.
+---@return nil
+local function packageReceivedLoop()
+  while true do
+    local _, packageObject = os.pullEvent("package_received")
+    runtime.recordPackageEvent(state, persistence, "in", packageObject)
+  end
+end
+
+parallel.waitForAny(heartbeatLoop, messageLoop, screenLoop, statusRefreshLoop, displayRefreshLoop, inputLoop, packageSentLoop, packageReceivedLoop)

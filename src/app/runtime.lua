@@ -39,6 +39,11 @@
 ---@field assignments WarehouseAssignment[]
 ---@field total_assignments integer
 ---@field total_items integer
+---@field packages WarehouseTrackedPackages|nil
+
+---@class WarehouseTrackedPackages
+---@field ["in"] string[]
+---@field ["out"] string[]
 
 ---@class WarehouseAssignmentExecutionEntry
 ---@field assignment_id string
@@ -57,11 +62,7 @@
 ---@field total_items_requested integer
 ---@field total_items_queued integer
 ---@field assignments WarehouseAssignmentExecutionEntry[]
-
----@class WarehouseTrainDepartureEvent
----@field station_name string
----@field train_name string
----@field sent_at number
+---@field packages WarehouseTrackedPackages|nil
 
 ---@class WarehouseAcceptedOwner
 ---@field coordinator_id string
@@ -97,12 +98,77 @@
 ---@field last_assignment_execution WarehouseAssignmentExecution|nil
 ---@field last_assignment_execution_is_persisted boolean
 ---@field last_assignment_execution_at number|nil
----@field last_train_departure WarehouseTrainDepartureEvent|nil
 ---@field owner WarehouseAcceptedOwner|nil
 
 ---Warehouse runtime state construction.
 ---@class WarehouseRuntime
 local M = {}
+
+local log = require("deps.log")
+
+local function emptyPackages()
+  return {
+    ["in"] = {},
+    ["out"] = {},
+  }
+end
+
+local function ensureTrackedPackages(target)
+  if type(target.packages) ~= "table" then
+    target.packages = emptyPackages()
+  end
+  if type(target.packages["in"]) ~= "table" then
+    target.packages["in"] = {}
+  end
+  if type(target.packages["out"]) ~= "table" then
+    target.packages["out"] = {}
+  end
+  return target.packages
+end
+
+local function appendUnique(list, value)
+  for _, existing in ipairs(list or {}) do
+    if existing == value then
+      return false
+    end
+  end
+
+  list[#list + 1] = value
+  return true
+end
+
+local function buildPackageId(packageObject)
+  if type(packageObject) ~= "table" or type(packageObject.getOrderData) ~= "function" then
+    return nil, "package object has no getOrderData()"
+  end
+
+  local orderData = packageObject.getOrderData()
+  if type(orderData) ~= "table" then
+    return nil, "package has no order data"
+  end
+
+  local orderId = orderData.getOrderID and orderData.getOrderID() or nil
+  local linkIndex = orderData.getLinkIndex and orderData.getLinkIndex() or nil
+  local index = orderData.getIndex and orderData.getIndex() or nil
+  if orderId == nil or linkIndex == nil or index == nil then
+    return nil, "package order data was missing id, link index, or index"
+  end
+
+  return string.format("%s-%s-%s", tostring(orderId), tostring(linkIndex), tostring(index))
+end
+
+local function requirePeripheral(name, expectedMethod)
+  local peripheralObject = peripheral.wrap(name)
+  if not peripheralObject then
+    error("missing peripheral: " .. tostring(name), 0)
+  end
+
+  if expectedMethod and type(peripheralObject[expectedMethod]) ~= "function" then
+    error("configured peripheral does not support " .. expectedMethod .. ": " .. tostring(name), 0)
+  end
+
+  return peripheralObject
+end
 
 ---Build a fresh warehouse runtime state table from validated config.
 ---@param config WarehouseConfig
@@ -128,9 +194,68 @@ function M.newState(config)
     last_assignment_execution = nil,
     last_assignment_execution_is_persisted = false,
     last_assignment_execution_at = nil,
-    last_train_departure = nil,
     owner = nil,
   }
+end
+
+---Fail loudly when required configured peripherals are not available.
+---@param config WarehouseConfig
+---@return nil
+function M.validateConfiguredPeripherals(config)
+  requirePeripheral(config.logistics.stock_ticker, "requestFiltered")
+  requirePeripheral(config.logistics.postbox, nil)
+
+  for _, entry in ipairs(config.storage or {}) do
+    local packager = requirePeripheral(entry.packager, "list")
+    if type(packager.getItemDetail) ~= "function" then
+      error("configured peripheral does not support getItemDetail: " .. tostring(entry.packager), 0)
+    end
+  end
+end
+
+---Record one package event against the currently tracked transfer request.
+---@param state WarehouseState
+---@param persistence WarehousePersistence
+---@param direction '"in"'|'"out"'
+---@param packageObject table
+---@return boolean recorded
+---@return string|nil packageId
+function M.recordPackageEvent(state, persistence, direction, packageObject)
+  local currentRequestId = state.latest_assignment_batch and state.latest_assignment_batch.batch_id
+    or (state.last_assignment_execution and state.last_assignment_execution.batch_id)
+    or nil
+  if not currentRequestId then
+    return false, nil
+  end
+
+  local packageId, err = buildPackageId(packageObject)
+  if not packageId then
+    log.warn("Ignored %s package event for request=%s: %s", tostring(direction), tostring(currentRequestId), tostring(err))
+    return false, nil
+  end
+
+  local recorded = false
+  if state.latest_assignment_batch and state.latest_assignment_batch.batch_id == currentRequestId then
+    local packages = ensureTrackedPackages(state.latest_assignment_batch)
+    if appendUnique(packages[direction], packageId) then
+      persistence.persistAssignmentBatch(state.latest_assignment_batch)
+      recorded = true
+    end
+  end
+
+  if state.last_assignment_execution and state.last_assignment_execution.batch_id == currentRequestId then
+    local packages = ensureTrackedPackages(state.last_assignment_execution)
+    if appendUnique(packages[direction], packageId) then
+      persistence.persistAssignmentExecution(state.last_assignment_execution)
+      recorded = true
+    end
+  end
+
+  if recorded then
+    log.info("Recorded package %s for request=%s direction=%s", packageId, tostring(currentRequestId), direction)
+  end
+
+  return recorded, packageId
 end
 
 return M

@@ -16,6 +16,7 @@
 
 ---@class WarehouseConfigLogistics
 ---@field stock_ticker string Peripheral name for the Create stock ticker.
+---@field postbox string Peripheral name for the Create postbox that emits package events.
 
 ---@class WarehouseConfigLogging
 ---@field output LogOutputConfig
@@ -81,6 +82,7 @@ function Config.default()
     },
     logistics = {
       stock_ticker = "Create_StockTicker_0",
+      postbox = "Create_Postbox_0",
     },
     logging = {
       output = {
@@ -177,6 +179,9 @@ function Config.fromDeserialized(cfg)
 
   if type(cfg.logistics.stock_ticker) ~= "string" or cfg.logistics.stock_ticker == "" then
     error("config.logistics.stock_ticker is required", 0)
+  end
+  if type(cfg.logistics.postbox) ~= "string" or cfg.logistics.postbox == "" then
+    error("config.logistics.postbox is required", 0)
   end
 
   if type(cfg.logging.output) ~= "table" then

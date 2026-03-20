@@ -38,6 +38,8 @@ end
 local lu = require("deps.luaunit")
 
 _G.TestWarehouseExecutor = require("tests.app.test_executor")
+_G.TestWarehouseRuntime = require("tests.app.test_runtime")
 _G.TestWarehouseNetwork = require("tests.infra.test_network")
+_G.TestWarehousePersistence = require("tests.infra.test_persistence")
 
 return os.exit(lu.LuaUnit.run())

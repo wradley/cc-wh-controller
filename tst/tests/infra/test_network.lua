@@ -221,6 +221,7 @@ function TestWarehouseNetwork:testAssignTransferRequestPersistsExecutesAndReplie
         total_assignments = 1,
         total_items_requested = 9,
         total_items_queued = 9,
+        packages = batch.packages,
         assignments = {
           {
             assignment_id = "assign-1",
@@ -238,6 +239,8 @@ function TestWarehouseNetwork:testAssignTransferRequestPersistsExecutesAndReplie
 
   lu.assertEquals(persistedBatch.batch_id, "tr-1")
   lu.assertEquals(state.latest_assignment_batch.batch_id, "tr-1")
+  lu.assertEquals(state.latest_assignment_batch.packages["in"][1], nil)
+  lu.assertEquals(state.latest_assignment_batch.packages["out"][1], nil)
   lu.assertEquals(executorCalls, 1)
   lu.assertEquals(#ccEnv.getSentMessages(), 1)
   lu.assertTrue(ccEnv.getSentMessages()[1].message.ok)
@@ -260,6 +263,14 @@ function TestWarehouseNetwork:testGetTransferRequestStatusReturnsExecutionForOwn
     total_assignments = 1,
     total_items_requested = 9,
     total_items_queued = 9,
+    packages = {
+      ["in"] = {
+        "123-1-1",
+      },
+      ["out"] = {
+        "456-1-1",
+      },
+    },
     assignments = {
       {
         assignment_id = "assign-1",
@@ -293,6 +304,7 @@ function TestWarehouseNetwork:testGetTransferRequestStatusReturnsExecutionForOwn
   lu.assertTrue(ccEnv.getSentMessages()[1].message.ok)
   lu.assertEquals(ccEnv.getSentMessages()[1].message.result.status, "queued")
   lu.assertEquals(ccEnv.getSentMessages()[1].message.result.assignments[1].queued_items, 9)
+  lu.assertEquals(ccEnv.getSentMessages()[1].message.result.packages["in"][1], "123-1-1")
 end
 
 return TestWarehouseNetwork

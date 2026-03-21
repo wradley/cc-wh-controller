@@ -104,7 +104,7 @@
 ---@class WarehouseRuntime
 local M = {}
 
-local log = require("deps.log")
+local log = require("log")
 
 local function emptyPackages()
   return {

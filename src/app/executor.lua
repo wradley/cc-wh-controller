@@ -1,7 +1,7 @@
 ---Warehouse assignment execution backed by the Create stock ticker.
 ---@class WarehouseExecutor
 local M = {}
-local log = require("deps.log")
+local log = require("log")
 
 local function assignmentRequestedItems(assignment)
   local total = 0

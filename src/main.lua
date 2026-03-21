@@ -11,11 +11,13 @@ local function prependPackagePath(path)
   }, ";")
 end
 
-prependPackagePath("/src/deps/?.lua")
-prependPackagePath("/src/deps/?/init.lua")
+prependPackagePath("/lib/log/0.1.0/?.lua")
+prependPackagePath("/lib/log/0.1.0/?/init.lua")
+prependPackagePath("/lib/rednet_contracts/0.1.0/?.lua")
+prependPackagePath("/lib/rednet_contracts/0.1.0/?/init.lua")
 
 local Config = require("model.config")
-local log = require("deps.log")
+local log = require("log")
 
 log.config({
   output = {

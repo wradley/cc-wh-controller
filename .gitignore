@@ -1,5 +1,7 @@
 # Local files on CraftOS
+/bin
 /etc
+/lib
 /var
 
 # IDE

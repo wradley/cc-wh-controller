@@ -1,6 +1,6 @@
 ---Warehouse network transport helpers for coordinator communication.
 local contracts = require("rednet_contracts")
-local log = require("deps.log")
+local log = require("log")
 
 ---@class WarehouseNetwork
 local M = {}

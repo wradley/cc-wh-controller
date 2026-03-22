@@ -5,6 +5,7 @@ return {
   version = "0.2.0",
   source_base = "https://raw.githubusercontent.com/wradley/cc-wh-controller/refs/heads/main",
   source_prefix = nil,
+  bin = "src/main.lua",
   files = {
     "README.md",
     "install/templates/config.lua",

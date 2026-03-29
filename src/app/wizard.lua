@@ -413,6 +413,30 @@ function Wizard.run(configPath)
   writeFile(configPath, "return " .. serializeVal(config, "") .. "\n")
   print("")
   print("Config written to " .. configPath)
+
+  --------------------------------------------------------------------------
+  -- Startup registration (optional)
+  --------------------------------------------------------------------------
+  print("")
+  if yesno("Start wh-controller automatically at boot?", true) then
+    local STARTUP = "/startup.lua"
+    local line    = 'shell.run("/bin/wh-controller")\n'
+    local existing = ""
+    local f = fs.open(STARTUP, "r")
+    if f then existing = f.readAll(); f.close() end
+    -- only append if the line isn't already there
+    if not existing:find('wh%-controller', 1, false) then
+      local out = fs.open(STARTUP, "w")
+      out.write(existing)
+      if existing ~= "" and existing:sub(-1) ~= "\n" then out.write("\n") end
+      out.write(line)
+      out.close()
+      print("Added to " .. STARTUP)
+    else
+      print("Already present in " .. STARTUP .. " — skipped.")
+    end
+  end
+
   return true
 end
 

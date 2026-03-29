@@ -19,6 +19,17 @@ prependPackagePath("/lib/rednet_contracts/0.1.0/?/init.lua")
 local Config = require("model.config")
 local log = require("log")
 
+local CONFIG_PATH = "/etc/wh-controller/config.lua"
+
+if not fs.exists(CONFIG_PATH) then
+  local wizard = require("app.wizard")
+  local ok = wizard.run(CONFIG_PATH)
+  if not ok then
+    printError("Setup not completed. Run wh-controller again to configure.")
+    return
+  end
+end
+
 log.config({
   output = {
     file = "/var/wh-controller/warehouse.log",
@@ -32,7 +43,7 @@ log.config({
   },
 })
 
-local configOk, configOrError = pcall(Config.load, "/etc/wh-controller/config.lua")
+local configOk, configOrError = pcall(Config.load, CONFIG_PATH)
 if not configOk then
   log.panic("Failed to load warehouse config: %s", tostring(configOrError))
 end

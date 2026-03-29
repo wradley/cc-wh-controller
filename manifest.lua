@@ -14,6 +14,7 @@ return {
     "src/main.lua",
     "src/app/executor.lua",
     "src/app/runtime.lua",
+    "src/app/wizard.lua",
     "src/app/snapshot.lua",
     "src/infra/network.lua",
     "src/infra/persistence.lua",

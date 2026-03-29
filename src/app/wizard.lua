@@ -418,7 +418,7 @@ function Wizard.run(configPath)
   -- Startup registration (optional)
   --------------------------------------------------------------------------
   print("")
-  if yesno("Start wh-controller automatically at boot?", true) then
+  if yesno("Start wh-controller at boot?", true) then
     local STARTUP = "/startup.lua"
     local line    = 'shell.run("/bin/wh-controller")\n'
     local existing = ""

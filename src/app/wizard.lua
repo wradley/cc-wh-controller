@@ -37,16 +37,13 @@ local function scanModems()
   return wired, wireless
 end
 
----Find all peripherals that expose a given method.
----Uses capability detection rather than type name strings to stay robust
----across Create versions.
----@param method string
+---Find all peripherals of a given Create type name.
+---@param typeName string
 ---@return string[]
-local function scanByMethod(method)
+local function scanByType(typeName)
   local found = {}
   for _, name in ipairs(peripheral.getNames()) do
-    local p = peripheral.wrap(name)
-    if p and type(p[method]) == "function" then
+    if peripheral.hasType(name, typeName) then
       found[#found + 1] = name
     end
   end
@@ -269,17 +266,15 @@ function Wizard.run(configPath)
   --------------------------------------------------------------------------
   section(3, 5, "Logistics Peripherals")
 
-  -- Stock ticker: identified by requestFiltered() — unique to Create_StockTicker
   print("  Stock ticker:")
   local tickers = waitForPeripherals("stock ticker", function()
-    return scanByMethod("requestFiltered")
+    return scanByType("Create_StockTicker")
   end)
   local stockTickerName = pickOrEnter("peripheral name", tickers, true)
 
-  -- Postbox: identified by getConfiguration() — unique to Create_Postbox
   print("  Postbox:")
   local postboxes = waitForPeripherals("postbox", function()
-    return scanByMethod("getConfiguration")
+    return scanByType("create:package_postbox")
   end)
   local postboxName = pickOrEnter("peripheral name", postboxes, true)
 
@@ -288,10 +283,9 @@ function Wizard.run(configPath)
   --------------------------------------------------------------------------
   section(4, 5, "Storage (Packagers)")
 
-  -- Packager: identified by makePackage() — unique to Create_Packager
   print("  Scanning for packagers...")
   local packagerNames = waitForPeripherals("packagers", function()
-    return scanByMethod("makePackage")
+    return scanByType("Create_Packager")
   end)
 
   local storageEntries = {}
@@ -332,8 +326,7 @@ function Wizard.run(configPath)
   --------------------------------------------------------------------------
   section(5, 5, "Train Export Station (optional)")
 
-  -- Train station: identified by getStationName() — unique to Create_Station
-  local stationNames = scanByMethod("getStationName")
+  local stationNames = scanByType("Create_Station")
   local exportStation = nil
 
   if #stationNames > 0 then

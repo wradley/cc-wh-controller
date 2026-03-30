@@ -13,8 +13,8 @@ end
 
 prependPackagePath("/lib/log/0.1.0/?.lua")
 prependPackagePath("/lib/log/0.1.0/?/init.lua")
-prependPackagePath("/lib/rednet_contracts/0.1.0/?.lua")
-prependPackagePath("/lib/rednet_contracts/0.1.0/?/init.lua")
+prependPackagePath("/lib/rednet_contracts/0.1.1/?.lua")
+prependPackagePath("/lib/rednet_contracts/0.1.1/?/init.lua")
 
 local Config = require("model.config")
 local log = require("log")

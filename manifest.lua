@@ -3,7 +3,6 @@ return {
   type = "program",
   name = "wh-controller",
   version = "0.2.0",
-  source_base = "https://raw.githubusercontent.com/wradley/cc-wh-controller/refs/heads/main",
   source_prefix = nil,
   bin = "src/main.lua",
   install_script = "install/setup.lua",
@@ -24,7 +23,7 @@ return {
   },
   deps = {
     log              = { version = "0.1.0" },
-    rednet_contracts = { version = "0.1.0" },
+    rednet_contracts = { version = "0.1.1" },
   },
   dev_deps = {
     luaunit = { version = "3.4" },
